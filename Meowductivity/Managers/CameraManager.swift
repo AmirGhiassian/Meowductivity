@@ -32,6 +32,12 @@ class CameraManager: NSObject, ObservableObject {
         checkPermission()
     }
     
+    deinit {
+        if captureSession.isRunning {
+            captureSession.stopRunning()
+        }
+    }
+    
     func checkPermission() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
@@ -127,7 +133,9 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         } else {
             // Forward live frames for real-time inference
             // Note: In a production app, we would drop frames here (e.g., process 1 out of 5 frames) to save CPU
-            if GestureRecognizer.shared.isModelLoaded {
+            if HandTracker.shared.isActive {
+                HandTracker.shared.processFrame(croppedImage)
+            } else if GestureRecognizer.shared.isModelLoaded {
                 GestureRecognizer.shared.predict(image: croppedImage, activeGestures: self.activeGestures)
             }
         }

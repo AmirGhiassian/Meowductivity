@@ -22,6 +22,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Request camera permissions on launch if not determined
         checkCameraPermissions()
+        
+        // Load active gestures for the background camera manager
+        let schema = Schema([GestureTask.self])
+        if let config = try? ModelConfiguration(schema: schema, isStoredInMemoryOnly: false),
+           let container = try? ModelContainer(for: schema, configurations: [config]) {
+            refreshActiveGestures(modelContext: container.mainContext)
+        }
     }
     
     func refreshActiveGestures(modelContext: ModelContext) {

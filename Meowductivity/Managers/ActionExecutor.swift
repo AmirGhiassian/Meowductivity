@@ -81,8 +81,33 @@ class ActionExecutor {
     }
 
     private func switchApplication() {
-        // Simulates Cmd+Tab
-        postKeyCombo(virtualKeys: [0x30], flags: .maskCommand) // 0x30 = Tab, 0x37 = Cmd
+        // App Switcher logic: Hold Cmd, tap Tab, wait for hand open to release Cmd
+        print("Opening App Switcher and starting hand tracking...")
+        
+        // 1. Hold Cmd Down
+        let src = CGEventSource(stateID: .hidSystemState)
+        let cmdDown = CGEvent(keyboardEventSource: src, virtualKey: 0x37, keyDown: true)
+        cmdDown?.flags = .maskCommand
+        cmdDown?.post(tap: .cghidEventTap)
+        
+        // 2. Tap Tab
+        let tabDown = CGEvent(keyboardEventSource: src, virtualKey: 0x30, keyDown: true)
+        tabDown?.flags = .maskCommand
+        tabDown?.post(tap: .cghidEventTap)
+        
+        let tabUp = CGEvent(keyboardEventSource: src, virtualKey: 0x30, keyDown: false)
+        tabUp?.flags = .maskCommand
+        tabUp?.post(tap: .cghidEventTap)
+        
+        // 3. Start Hand Tracking
+        HandTracker.shared.startTracking()
+        
+        HandTracker.shared.onFistOpened = {
+            print("Hand opening detected - releasing App Switcher")
+            // 4. Release Cmd to select app
+            let cmdUp = CGEvent(keyboardEventSource: src, virtualKey: 0x37, keyDown: false)
+            cmdUp?.post(tap: .cghidEventTap)
+        }
     }
     
     private func switchScreen() {

@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct QuickSettingsView: View {
-    @AppStorage("isCameraManagerEnabled") private var isCameraManagerEnabled = true
+    @AppStorage("isRecognitionEnabled") private var isRecognitionEnabled = true
     @Environment(\.openSettings) private var openSettings
     
     var body: some View {
@@ -9,7 +9,7 @@ struct QuickSettingsView: View {
             Text("Meowductivity")
                 .font(.headline)
             
-            Toggle("Enable Camera Manager", isOn: $isCameraManagerEnabled)
+            Toggle("Enable Gesture Recognition", isOn: $isRecognitionEnabled)
             
             Divider()
             
