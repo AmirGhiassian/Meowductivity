@@ -7,12 +7,62 @@
 
 import SwiftUI
 import SwiftData
+import AppKit
+
+import AVFoundation
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+    
+    // Global camera manager to run in the background
+    let cameraManager = CameraManager()
+    
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Hide the app from the Dock
+        NSApp.setActivationPolicy(.accessory)
+        
+        // Request camera permissions on launch if not determined
+        checkCameraPermissions()
+    }
+    
+    func refreshActiveGestures(modelContext: ModelContext) {
+        let descriptor = FetchDescriptor<GestureTask>()
+        do {
+            let gestures = try modelContext.fetch(descriptor)
+            var activeDict: [String: String] = [:]
+            for gesture in gestures where gesture.isActive {
+                activeDict[gesture.gestureName] = gesture.actionName
+            }
+            cameraManager.activeGestures = activeDict
+            print("Loaded \(activeDict.count) active gestures for inference.")
+        } catch {
+            print("Failed to fetch gestures: \(error)")
+        }
+    }
+    
+    private func checkCameraPermissions() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                print("Camera permission granted on launch: \(granted)")
+            }
+        case .denied, .restricted:
+            print("Camera permission was denied or restricted.")
+            // Ideally, show an alert directing the user to System Settings > Privacy & Security > Camera
+        case .authorized:
+            print("Camera permission already authorized.")
+        @unknown default:
+            break
+        }
+    }
+}
 
 @main
 struct MeowductivityApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
-            Item.self,
+            GestureTask.self,
         ])
         let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
 
@@ -24,9 +74,17 @@ struct MeowductivityApp: App {
     }()
 
     var body: some Scene {
-        WindowGroup {
-            ContentView()
+        MenuBarExtra("Meowductivity", systemImage: "camera.viewfinder") {
+            QuickSettingsView()
         }
-        .modelContainer(sharedModelContainer)
+        .menuBarExtraStyle(.window)
+        
+        Settings {
+            SettingsView()
+                .modelContainer(sharedModelContainer)
+                .onAppear {
+                    appDelegate.refreshActiveGestures(modelContext: sharedModelContainer.mainContext)
+                }
+        }
     }
 }
