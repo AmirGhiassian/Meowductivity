@@ -1,7 +1,7 @@
 import SwiftUI
 import SwiftData
 
-struct GesturesSettingsView: View {
+struct TrainingSettingsView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var gestures: [GestureTask]
     
@@ -45,32 +45,13 @@ struct GesturesSettingsView: View {
                 List {
                     ForEach(gestures) { gesture in
                         HStack {
-                            VStack(alignment: .leading) {
-                                Text(gesture.gestureName)
-                                    .font(.headline)
-                                Text("Action: \(gesture.actionName)")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                            }
-                            
+                            Text(gesture.gestureName)
+                                .font(.headline)
                             Spacer()
-                            
-                            Toggle("", isOn: Binding(
-                                get: { gesture.isActive },
-                                set: { newValue in
-                                    gesture.isActive = newValue
-                                }
-                            ))
-                            .labelsHidden()
                         }
                         .padding(.vertical, 4)
                     }
                     .onDelete(perform: deleteGestures)
-                }
-                .onChange(of: gestures) { _ in
-                    if let delegate = NSApp.delegate as? AppDelegate {
-                        delegate.refreshActiveGestures(modelContext: modelContext)
-                    }
                 }
             }
             
@@ -120,14 +101,14 @@ struct GesturesSettingsView: View {
             .background(Color(NSColor.controlBackgroundColor))
         }
         .sheet(isPresented: $showingRecordSheet) {
-            RecordGestureView { gestureName, actionName in
-                addGesture(gestureName: gestureName, actionName: actionName)
+            RecordGestureView { gestureName in
+                addGesture(gestureName: gestureName)
             }
         }
     }
     
-    private func addGesture(gestureName: String, actionName: String) {
-        let newGesture = GestureTask(gestureName: gestureName, actionName: actionName)
+    private func addGesture(gestureName: String) {
+        let newGesture = GestureTask(gestureName: gestureName, actionName: "None")
         modelContext.insert(newGesture)
         needsTraining = true
         isRecognitionEnabled = false
@@ -144,9 +125,4 @@ struct GesturesSettingsView: View {
             isRecognitionEnabled = false
         }
     }
-}
-
-#Preview {
-    GesturesSettingsView()
-        .modelContainer(for: GestureTask.self, inMemory: true)
 }

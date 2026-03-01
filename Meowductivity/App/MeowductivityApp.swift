@@ -28,9 +28,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let descriptor = FetchDescriptor<GestureTask>()
         do {
             let gestures = try modelContext.fetch(descriptor)
-            var activeDict: [String: String] = [:]
+            var activeDict: [String: GestureActionData] = [:]
             for gesture in gestures where gesture.isActive {
-                activeDict[gesture.gestureName] = gesture.actionName
+                if gesture.actionName != "None" {
+                    activeDict[gesture.gestureName] = GestureActionData(actionName: gesture.actionName, appURL: gesture.appURL, keyCombo: gesture.keyCombo)
+                }
             }
             cameraManager.activeGestures = activeDict
             print("Loaded \(activeDict.count) active gestures for inference.")

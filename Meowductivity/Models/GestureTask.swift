@@ -7,11 +7,15 @@ final class GestureTask {
     var gestureName: String
     var actionName: String
     var isActive: Bool
+    var appURL: String?
+    var keyCombo: String?
     
-    init(id: UUID = UUID(), gestureName: String, actionName: String, isActive: Bool = true) {
+    init(id: UUID = UUID(), gestureName: String, actionName: String = "None", isActive: Bool = true, appURL: String? = nil, keyCombo: String? = nil) {
         self.id = id
         self.gestureName = gestureName
         self.actionName = actionName
         self.isActive = isActive
+        self.appURL = appURL
+        self.keyCombo = keyCombo
     }
 }

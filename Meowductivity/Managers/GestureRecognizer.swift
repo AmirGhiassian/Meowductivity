@@ -55,7 +55,7 @@ class GestureRecognizer: ObservableObject {
         }
     }
     
-    func predict(image: CGImage, activeGestures: [String: String]) {
+    func predict(image: CGImage, activeGestures: [String: GestureActionData]) {
         guard let visionModel = visionModel else { return }
         
         // Ensure recognition is globally enabled
@@ -82,8 +82,8 @@ class GestureRecognizer: ObservableObject {
                             self.currentGesture = gestureName
                             
                             // Pass execution to ActionExecutor if we have a match
-                            if let actionStr = activeGestures[gestureName] {
-                                ActionExecutor.shared.executeAction(named: actionStr)
+                            if let actionData = activeGestures[gestureName] {
+                                ActionExecutor.shared.executeAction(named: actionData.actionName, appURL: actionData.appURL, keyCombo: actionData.keyCombo)
                             }
                         }
                         self.currentConsecutiveMatches = 0 // reset after firing

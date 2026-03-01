@@ -4,16 +4,22 @@ import CoreImage
 import AppKit
 import Combine
 
+struct GestureActionData {
+    let actionName: String
+    let appURL: String?
+    let keyCombo: String?
+}
+
 class CameraManager: NSObject, ObservableObject {
     @Published var permissionGranted = false
     let captureSession = AVCaptureSession()
     
     @Published var isRecording = false
     @Published var capturedFramesCount = 0
-    let maxFrames = 120 // ≈4 seconds at 30fps
+    var maxFrames = 120 // ≈4 seconds at 30fps
     
-    // Maintain a dict of gesture names to their actions for inference
-    var activeGestures: [String: String] = [:]
+    // Maintain a dict of gesture names to their action data for inference
+    var activeGestures: [String: GestureActionData] = [:]
     
     private var capturedBuffers: [CGImage] = []
     private var videoOutput = AVCaptureVideoDataOutput()

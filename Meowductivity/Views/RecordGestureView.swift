@@ -6,14 +6,12 @@ struct RecordGestureView: View {
     @StateObject private var cameraManager = CameraManager()
     
     @State private var gestureName: String = ""
-    @State private var selectedAction: String = "Switch Application"
+    @State private var recordingDuration: Int = 4 // Default to 4 seconds
     @State private var isSaving: Bool = false
     @State private var recordedFramesCount: Int = 0
     @State private var hasRecorded: Bool = false
     
-    let actions = ["Switch Application", "Switch Screen", "Show Mission Control", "Show Desktop"]
-    
-    var onSave: (String, String) -> Void
+    var onSave: (String) -> Void
     
     var body: some View {
         VStack(spacing: 20) {
@@ -22,13 +20,19 @@ struct RecordGestureView: View {
             
             Form {
                 TextField("Gesture Name:", text: $gestureName)
-                
-                Picker("Action:", selection: $selectedAction) {
-                    ForEach(actions, id: \.self) { action in
-                        Text(action).tag(action)
+                LabeledContent("Recording Duration:") {
+                    HStack(spacing: 4) {
+                        TextField("", value: $recordingDuration, format: .number)
+                            .frame(width: 60)
+                            .textFieldStyle(.roundedBorder)
+                        Stepper("", value: $recordingDuration, in: 1...300)
+                            .labelsHidden()
+                        Text("seconds")
+                            .foregroundColor(.secondary)
+                            .font(.subheadline)
                     }
                 }
-                .pickerStyle(.menu)
+                .disabled(cameraManager.isRecording || hasRecorded)
             }
             .padding(.horizontal)
             
@@ -107,6 +111,7 @@ struct RecordGestureView: View {
             HStack {
                 Button(cameraManager.isRecording ? "Recording..." : (hasRecorded ? "Re-Record" : "Start Recording")) {
                     hasRecorded = false
+                    cameraManager.maxFrames = recordingDuration * 30
                     cameraManager.startRecording()
                 }
                 .buttonStyle(.borderedProminent)
@@ -121,7 +126,7 @@ struct RecordGestureView: View {
                 .keyboardShortcut(.cancelAction)
                 
                 Button("Save") {
-                    onSave(gestureName, selectedAction)
+                    onSave(gestureName)
                     dismiss()
                 }
                 .disabled(!hasRecorded || isSaving)
@@ -152,7 +157,7 @@ struct RecordGestureView: View {
 }
 
 #Preview {
-    RecordGestureView { gesture, action in
-        print("Saved \(gesture) for \(action)")
+    RecordGestureView { gesture in
+        print("Saved \(gesture)")
     }
 }
