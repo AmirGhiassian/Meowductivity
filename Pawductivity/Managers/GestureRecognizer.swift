@@ -21,6 +21,9 @@ class GestureRecognizer: ObservableObject {
 
     // MARK: – Recognition state
 
+    private var previousLandmarks: [CGPoint]?
+    private var previousLandmarksTime: Date?
+
     /// Rolling window of recent predictions used to decide when to fire.
     /// Each entry is (timestamp, label, probability).
     private var predictionWindow: [(timestamp: Date, label: String, prob: Double)] = []
@@ -42,8 +45,11 @@ class GestureRecognizer: ObservableObject {
     /// It stays blocked until the model stops predicting it (hand released / moved away).
     private var awaitingRelease: String? = nil
 
-    /// Hard minimum between ANY two firings (safety net for rapid camera frames)
-    private let minimumCooldown: TimeInterval = 1.0
+    /// Configurable cooldown between gesture firings (seconds)
+    private var gestureCooldown: TimeInterval {
+        let defaultCooldown = 1.0
+        return UserDefaults.standard.object(forKey: "gestureCooldown") as? Double ?? defaultCooldown
+    }
     private var lastFiredTime: Date = .distantPast
 
     private var recognitionSensitivity: Double {
@@ -137,6 +143,41 @@ class GestureRecognizer: ObservableObject {
             dict["p\(i)_y"] = Double(pt.y)
         }
 
+        let now = Date()
+        var h1_dx = 0.0
+        var h1_dy = 0.0
+        var h2_dx = 0.0
+        var h2_dy = 0.0
+
+        if let prev = previousLandmarks, let prevTime = previousLandmarksTime,
+           now.timeIntervalSince(prevTime) < 0.2, prev.count == landmarks.count {
+            func centroid(_ pts: ArraySlice<CGPoint>) -> CGPoint {
+                let x = pts.map { $0.x }.reduce(0, +) / CGFloat(pts.count)
+                let y = pts.map { $0.y }.reduce(0, +) / CGFloat(pts.count)
+                return CGPoint(x: x, y: y)
+            }
+            let currC1 = centroid(landmarks[0..<21])
+            let prevC1 = centroid(prev[0..<21])
+            h1_dx = Double(currC1.x - prevC1.x)
+            h1_dy = Double(currC1.y - prevC1.y)
+
+            if landmarks.count == 42 {
+                let currC2 = centroid(landmarks[21..<42])
+                let prevC2 = centroid(prev[21..<42])
+                h2_dx = Double(currC2.x - prevC2.x)
+                h2_dy = Double(currC2.y - prevC2.y)
+            }
+        }
+        previousLandmarks = landmarks
+        previousLandmarksTime = now
+
+        dict["h1_dx"] = h1_dx
+        dict["h1_dy"] = h1_dy
+        if landmarks.count == 42 {
+            dict["h2_dx"] = h2_dx
+            dict["h2_dy"] = h2_dy
+        }
+
         do {
             let provider = try MLDictionaryFeatureProvider(dictionary: dict)
             let prediction = try model.prediction(from: provider)
@@ -148,8 +189,6 @@ class GestureRecognizer: ObservableObject {
             let minProbability = 0.7 - (recognitionSensitivity * 0.5)
 
             let isAboveThreshold = prob >= minProbability && activeGestures.keys.contains(label)
-
-            let now = Date()
 
             // ── RELEASE DETECTION ──────────────────────────────────────────
             // If the current high-conf prediction is still the gesture we just fired,
@@ -164,7 +203,7 @@ class GestureRecognizer: ObservableObject {
             }
 
             // Hard minimum cooldown between any two separate firings
-            guard now.timeIntervalSince(lastFiredTime) > minimumCooldown else {
+            guard now.timeIntervalSince(lastFiredTime) > gestureCooldown else {
                 // Still allow window to decay even if cooldown is active
                 let cutoff = now.addingTimeInterval(-windowDuration)
                 predictionWindow.removeAll { $0.timestamp < cutoff }
@@ -176,11 +215,11 @@ class GestureRecognizer: ObservableObject {
             if isAboveThreshold {
                 predictionWindow.append((timestamp: now, label: label, prob: prob))
             } else {
-                // If the frame is low confidence or the wrong gesture, we simply skip adding it.
-                // The window will naturally decay over 'windowDuration' (0.8s).
-                // This allows for significant hand-detection flicker (common in 2-hand mode)
-                // without resetting a gesture progress that is 90% complete.
-                return
+                // Include "Unknown" frames so that noise and disabled gestures actually dilute the 
+                // rolling window fraction. This fixes a bug where active gestures could trigger falsely 
+                // when conflicting gestures were disabled, because skipping noise frames allowed a 
+                // sparse window to artificially achieve 100% dominance.
+                predictionWindow.append((timestamp: now, label: "Unknown", prob: 0.0))
             }
 
             // Drop frames that have aged out of the window.
@@ -214,7 +253,8 @@ class GestureRecognizer: ObservableObject {
             // Two-hand models are naturally noisier, so we use a slightly lower threshold.
             let requiredConfidence = landmarks.count == 42 ? (highConfidenceThreshold - 0.12) : highConfidenceThreshold
             
-            guard winnerFrac >= dominanceThreshold,
+            guard winnerLabel != "Unknown",
+                  winnerFrac >= dominanceThreshold,
                   winnerAvgProb >= requiredConfidence else { return }
 
             // ── FIRE ───────────────────────────────────────────────────────
@@ -231,7 +271,11 @@ class GestureRecognizer: ObservableObject {
                         appURL: actionData.appURL,
                         keyCombo: actionData.keyCombo
                     )
-                    NSSound(named: "Glass")?.play()
+                    
+                    let playSound = UserDefaults.standard.object(forKey: "playSound") as? Bool ?? true
+                    if playSound {
+                        NSSound(named: "Glass")?.play()
+                    }
                 }
             }
 

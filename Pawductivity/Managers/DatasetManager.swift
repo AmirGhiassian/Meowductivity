@@ -6,6 +6,31 @@ import CoreML
 
 struct GestureFrame: Codable {
     let landmarks: [CGPoint]
+    let h1_dx: Double
+    let h1_dy: Double
+    let h2_dx: Double
+    let h2_dy: Double
+
+    init(landmarks: [CGPoint], h1_dx: Double = 0.0, h1_dy: Double = 0.0, h2_dx: Double = 0.0, h2_dy: Double = 0.0) {
+        self.landmarks = landmarks
+        self.h1_dx = h1_dx
+        self.h1_dy = h1_dy
+        self.h2_dx = h2_dx
+        self.h2_dy = h2_dy
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case landmarks, h1_dx, h1_dy, h2_dx, h2_dy
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        landmarks = try container.decode([CGPoint].self, forKey: .landmarks)
+        h1_dx = try container.decodeIfPresent(Double.self, forKey: .h1_dx) ?? 0.0
+        h1_dy = try container.decodeIfPresent(Double.self, forKey: .h1_dy) ?? 0.0
+        h2_dx = try container.decodeIfPresent(Double.self, forKey: .h2_dx) ?? 0.0
+        h2_dy = try container.decodeIfPresent(Double.self, forKey: .h2_dy) ?? 0.0
+    }
 }
 
 struct GestureData: Codable {
@@ -71,9 +96,34 @@ class DatasetManager {
             // If we have many frames, we augment each one less.
             let augmentPerFrame = max(1, 120 / frames.count)
 
-            for seedFrame in frames where seedFrame.count == pointCount {
+            func centroid(_ pts: ArraySlice<CGPoint>) -> CGPoint {
+                let x = pts.map { $0.x }.reduce(0, +) / CGFloat(pts.count)
+                let y = pts.map { $0.y }.reduce(0, +) / CGFloat(pts.count)
+                return CGPoint(x: x, y: y)
+            }
+
+            for i in 0..<frames.count {
+                let seedFrame = frames[i]
+                guard seedFrame.count == pointCount else { continue }
+                
+                let prevFrame = i > 0 ? frames[i - 1] : seedFrame
+                
+                let h1_curr = centroid(seedFrame[0..<21])
+                let h1_prev = centroid(prevFrame[0..<21])
+                let base_h1_dx = Double(h1_curr.x - h1_prev.x)
+                let base_h1_dy = Double(h1_curr.y - h1_prev.y)
+                
+                var base_h2_dx = 0.0
+                var base_h2_dy = 0.0
+                if pointCount == 42 {
+                    let h2_curr = centroid(seedFrame[21..<42])
+                    let h2_prev = centroid(prevFrame[21..<42])
+                    base_h2_dx = Double(h2_curr.x - h2_prev.x)
+                    base_h2_dy = Double(h2_curr.y - h2_prev.y)
+                }
+
                 // Add the original frame
-                augmented.append(GestureFrame(landmarks: seedFrame))
+                augmented.append(GestureFrame(landmarks: seedFrame, h1_dx: base_h1_dx, h1_dy: base_h1_dy, h2_dx: base_h2_dx, h2_dy: base_h2_dy))
                 
                 // Add augmented versions
                 for _ in 0..<augmentPerFrame {
@@ -107,7 +157,13 @@ class DatasetManager {
                             newPoints.append(CGPoint(x: rx, y: ry))
                         }
                     }
-                    augmented.append(GestureFrame(landmarks: newPoints))
+                    
+                    let aug_h1_dx = (base_h1_dx * Double(cosA) - base_h1_dy * Double(sinA)) * Double(scale)
+                    let aug_h1_dy = (base_h1_dx * Double(sinA) + base_h1_dy * Double(cosA)) * Double(scale)
+                    let aug_h2_dx = (base_h2_dx * Double(cosA) - base_h2_dy * Double(sinA)) * Double(scale)
+                    let aug_h2_dy = (base_h2_dx * Double(sinA) + base_h2_dy * Double(cosA)) * Double(scale)
+
+                    augmented.append(GestureFrame(landmarks: newPoints, h1_dx: aug_h1_dx, h1_dy: aug_h1_dy, h2_dx: aug_h2_dx, h2_dy: aug_h2_dy))
                 }
             }
 
@@ -128,14 +184,18 @@ class DatasetManager {
     // MARK: – Load
 
     func loadLandmarks(forGesture gestureName: String) -> [[CGPoint]]? {
+        return loadFrames(forGesture: gestureName)?.map { $0.landmarks }
+    }
+
+    func loadFrames(forGesture gestureName: String) -> [GestureFrame]? {
         let fileURL = gesturesDirectory.appendingPathComponent("\(gestureName).json")
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
         do {
             let data = try Data(contentsOf: fileURL)
             let gestureData = try JSONDecoder().decode(GestureData.self, from: data)
-            return gestureData.frames.map { $0.landmarks }
+            return gestureData.frames
         } catch {
-            print("Failed to load landmarks for gesture \(gestureName): \(error)")
+            print("Failed to load frames for gesture \(gestureName): \(error)")
             return nil
         }
     }
@@ -192,15 +252,25 @@ class DatasetManager {
                 var labels = [String]()
                 var px: [[Double]] = Array(repeating: [], count: pointCount)
                 var py: [[Double]] = Array(repeating: [], count: pointCount)
+                var h1_dx: [Double] = []
+                var h1_dy: [Double] = []
+                var h2_dx: [Double]? = pointCount == 42 ? [] : nil
+                var h2_dy: [Double]? = pointCount == 42 ? [] : nil
 
                 for name in gestureNames {
-                    guard let frames = self.loadLandmarks(forGesture: name) else { continue }
+                    guard let frames = self.loadFrames(forGesture: name) else { continue }
                     for frame in frames {
-                        guard frame.count == pointCount else { continue }
+                        guard frame.landmarks.count == pointCount else { continue }
                         labels.append(name)
-                        for (i, pt) in frame.enumerated() {
+                        for (i, pt) in frame.landmarks.enumerated() {
                             px[i].append(Double(pt.x))
                             py[i].append(Double(pt.y))
+                        }
+                        h1_dx.append(frame.h1_dx)
+                        h1_dy.append(frame.h1_dy)
+                        if pointCount == 42 {
+                            h2_dx?.append(frame.h2_dx)
+                            h2_dy?.append(frame.h2_dy)
                         }
                     }
                 }
@@ -216,6 +286,12 @@ class DatasetManager {
                             px[i].append(Double.random(in: -0.05...0.05))
                             py[i].append(Double.random(in: -0.05...0.05))
                         }
+                        h1_dx.append(0.0)
+                        h1_dy.append(0.0)
+                        if pointCount == 42 {
+                            h2_dx?.append(0.0)
+                            h2_dy?.append(0.0)
+                        }
                     }
                 }
 
@@ -226,6 +302,12 @@ class DatasetManager {
                 for i in 0..<pointCount {
                     df.append(column: Column<Double>(name: "p\(i)_x", contents: px[i]))
                     df.append(column: Column<Double>(name: "p\(i)_y", contents: py[i]))
+                }
+                df.append(column: Column<Double>(name: "h1_dx", contents: h1_dx))
+                df.append(column: Column<Double>(name: "h1_dy", contents: h1_dy))
+                if pointCount == 42, let dx2 = h2_dx, let dy2 = h2_dy {
+                    df.append(column: Column<Double>(name: "h2_dx", contents: dx2))
+                    df.append(column: Column<Double>(name: "h2_dy", contents: dy2))
                 }
 
                 let isTwoHand = pointCount == 42

@@ -53,7 +53,6 @@ class ActionExecutor {
     
     // We prevent firing the same action rapidly
     private var lastExecutionTime: Date = Date.distantPast
-    private let cooldown: TimeInterval = 2.0
 
     /// Returns true if Accessibility permission is currently granted.
     var hasAccessibilityPermission: Bool {
@@ -153,6 +152,8 @@ class ActionExecutor {
     
     func executeAction(named actionName: String, appURL: String? = nil, keyCombo: String? = nil) {
         // Prevent rapid re-execution
+        let cooldown = UserDefaults.standard.object(forKey: "cooldown") as? TimeInterval ?? 3.0
+
         guard Date().timeIntervalSince(lastExecutionTime) > cooldown else { return }
         
         // "None" or unassigned gestures shouldn't execute

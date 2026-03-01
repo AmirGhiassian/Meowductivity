@@ -47,6 +47,8 @@ class CameraManager: NSObject, ObservableObject {
     
     // Dedicated serial queue for all AVCaptureSession operations to avoid concurrent access/crashes
     private let sessionQueue = DispatchQueue(label: "com.cat-corp.pawductivity.sessionQueue")
+    private let videoProcessingQueue = DispatchQueue(label: "com.cat-corp.pawductivity.videoProcessingQueue")
+    private let frameProcessingSemaphore = DispatchSemaphore(value: 1)
 
     var onRecordingFinished: (([[CGPoint]]) -> Void)?
 
@@ -278,26 +280,37 @@ class CameraManager: NSObject, ObservableObject {
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
 
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else { return }
-
-        var cropRatio = UserDefaults.standard.double(forKey: "cropSizeRatio")
-        if cropRatio == 0 { cropRatio = 0.85 }
-
-        // Capture published values to local variables to avoid data races
-        // Since we are already on a background thread, we can't safely access @Published directly.
-        // However, CameraManager mode and twoHandMode are only modified on the main thread.
-        // We'll use a local copy for this frame's logic.
-        var localTwoHandMode = false
-        var localMode: CameraMode = .inference
-        
-        DispatchQueue.main.sync {
-            localTwoHandMode = self.twoHandMode
-            localMode = self.mode
+        // If we're already processing a frame, drop this one to prevent the queue from filling up
+        if frameProcessingSemaphore.wait(timeout: .now()) == .timedOut {
+            return
         }
 
-        let maxHands = (localTwoHandMode || localMode == .inference) ? 2 : 1
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+            frameProcessingSemaphore.signal()
+            return
+        }
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        guard let cgImage = context.createCGImage(ciImage, from: ciImage.extent) else {
+            frameProcessingSemaphore.signal()
+            return
+        }
+
+        videoProcessingQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            var cropRatio = UserDefaults.standard.double(forKey: "cropSizeRatio")
+            if cropRatio == 0 { cropRatio = 0.85 }
+
+            // Capture published values to local variables to avoid data races
+            var localTwoHandMode = false
+            var localMode: CameraMode = .inference
+            
+            DispatchQueue.main.sync {
+                localTwoHandMode = self.twoHandMode
+                localMode = self.mode
+            }
+
+            let maxHands = (localTwoHandMode || localMode == .inference) ? 2 : 1
 
         // Always detect on the full frame so live dots follow the hand everywhere.
         // The crop box only controls the start/stop trigger, checked mathematically below.
@@ -319,8 +332,12 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
 
-        extractLandmarks(from: cgImage, maxHands: maxHands) { [weak self] normalizedHands, rawHands in
+        self.extractLandmarks(from: cgImage, maxHands: maxHands) { [weak self] normalizedHands, rawHands in
             guard let self = self else { return }
+            
+            defer {
+                self.frameProcessingSemaphore.signal()
+            }
 
             DispatchQueue.main.async {
                 // Update live overlay landmarks
@@ -391,6 +408,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                     }
                 }
             }
+        }
         }
     }
 }
