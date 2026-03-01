@@ -8,25 +8,38 @@
 import SwiftUI
 import SwiftData
 import AppKit
-
+import UserNotifications
 import AVFoundation
 
-class AppDelegate: NSObject, NSApplicationDelegate {
+class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     
     // Global camera manager to run in the background
-    let cameraManager = CameraManager()
+    let cameraManager = CameraManager.shared
     
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UNUserNotificationCenter.current().delegate = self
         // Hide the app from the Dock
         NSApp.setActivationPolicy(.accessory)
+        
+        // Setup transparent dots overlay
+        DotsOverlayWindowManager.shared.setup()
         
         // Request camera permissions on launch if not determined
         checkCameraPermissions()
         
+        // Request notification permissions
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if granted {
+                print("Notification permission granted.")
+            } else if let error = error {
+                print("Notification permission error: \(error)")
+            }
+        }
+        
         // Load active gestures for the background camera manager
         let schema = Schema([GestureTask.self])
-        if let config = try? ModelConfiguration(schema: schema, isStoredInMemoryOnly: false),
-           let container = try? ModelContainer(for: schema, configurations: [config]) {
+        let config = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+        if let container = try? ModelContainer(for: schema, configurations: [config]) {
             refreshActiveGestures(modelContext: container.mainContext)
         }
     }
@@ -63,11 +76,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             break
         }
     }
+    
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        // Show notification even when app is active/foreground
+        completionHandler([.banner, .sound])
+    }
 }
 
 @main
 struct MeowductivityApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    
+    @ObservedObject private var cameraManager = CameraManager.shared
     
     var sharedModelContainer: ModelContainer = {
         let schema = Schema([
@@ -83,7 +103,10 @@ struct MeowductivityApp: App {
     }()
 
     var body: some Scene {
-        MenuBarExtra("Meowductivity", systemImage: "camera.viewfinder") {
+        MenuBarExtra(
+            "Meowductivity",
+            systemImage: cameraManager.isHandInFrame ? "hand.raised.fill" : "camera.viewfinder"
+        ) {
             QuickSettingsView()
         }
         .menuBarExtraStyle(.window)
@@ -97,3 +120,4 @@ struct MeowductivityApp: App {
         }
     }
 }
+

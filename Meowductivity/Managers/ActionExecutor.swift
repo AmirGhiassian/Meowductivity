@@ -9,27 +9,48 @@ class ActionExecutor {
     private var lastExecutionTime: Date = Date.distantPast
     private let cooldown: TimeInterval = 2.0
     
-    let allActions = [
-        "None",
-        "Switch Application",
-        "Switch Screen",
-        "Show Mission Control",
-        "Show Desktop",
-        "Toggle Fullscreen",
-        "Minimize Window",
-        "Quit Application",
-        "Open Application...",
-        "Increase Volume",
-        "Decrease Volume",
-        "Mute Volume",
-        "Next Song",
-        "Previous Song",
-        "Play/Pause Media",
-        "Enable Dictation",
-        "Increase Brightness",
-        "Decrease Brightness",
-        "Custom Key Combo..."
+    struct ActionGroup {
+        let title: String
+        let actions: [String]
+    }
+    
+    let actionGroups: [ActionGroup] = [
+        ActionGroup(title: "General", actions: [
+            "None",
+            "Open Application...",
+            "Custom Key Combo...",
+            "Enable Dictation"
+        ]),
+        ActionGroup(title: "Window & Space", actions: [
+            "Switch Application (Forward)",
+            "Switch Application (Backward)",
+            "Switch Screen (Left)",
+            "Switch Screen (Right)",
+            "Show Mission Control",
+            "Show Desktop",
+            "Toggle Fullscreen",
+            "Minimize Window",
+            "Quit Application"
+        ]),
+        ActionGroup(title: "Media Control", actions: [
+            "Play/Pause Media",
+            "Next Song",
+            "Previous Song"
+        ]),
+        ActionGroup(title: "Volume", actions: [
+            "Increase Volume",
+            "Decrease Volume",
+            "Mute Volume"
+        ]),
+        ActionGroup(title: "Brightness", actions: [
+            "Increase Brightness",
+            "Decrease Brightness"
+        ])
     ]
+    
+    var allActions: [String] {
+        actionGroups.flatMap { $0.actions }
+    }
     
     func executeAction(named actionName: String, appURL: String? = nil, keyCombo: String? = nil) {
         // Prevent rapid re-execution
@@ -42,8 +63,10 @@ class ActionExecutor {
         lastExecutionTime = Date()
         
         switch actionName {
-        case "Switch Application": switchApplication()
-        case "Switch Screen": switchScreen()
+        case "Switch Application (Forward)": switchApplication(forward: true)
+        case "Switch Application (Backward)": switchApplication(forward: false)
+        case "Switch Screen (Left)": switchScreen(right: false)
+        case "Switch Screen (Right)": switchScreen(right: true)
         case "Show Mission Control": showMissionControl()
         case "Show Desktop": showDesktop()
         case "Toggle Fullscreen": toggleFullscreen()
@@ -61,7 +84,10 @@ class ActionExecutor {
         case "Decrease Brightness": decreaseBrightness()
         case "Custom Key Combo...": executeCustomKeyCombo(combo: keyCombo)
         default:
-            print("Unknown action: \(actionName)")
+            // Fallback for previous saved rules
+            if actionName == "Switch Application" { switchApplication(forward: true) }
+            else if actionName == "Switch Screen" { switchScreen(right: true) }
+            else { print("Unknown action: \(actionName)") }
         }
         
         // Post Notification if enabled
@@ -80,39 +106,45 @@ class ActionExecutor {
         UNUserNotificationCenter.current().add(request, withCompletionHandler: nil)
     }
 
-    private func switchApplication() {
-        // App Switcher logic: Hold Cmd, tap Tab, wait for hand open to release Cmd
-        print("Opening App Switcher and starting hand tracking...")
-        
-        // 1. Hold Cmd Down
+    private func switchApplication(forward: Bool) {
+        // App Switcher logic: Cmd + Tab (immediately release)
         let src = CGEventSource(stateID: .hidSystemState)
         let cmdDown = CGEvent(keyboardEventSource: src, virtualKey: 0x37, keyDown: true)
         cmdDown?.flags = .maskCommand
         cmdDown?.post(tap: .cghidEventTap)
         
-        // 2. Tap Tab
+        var tabFlags: CGEventFlags = .maskCommand
+        if !forward {
+            tabFlags.insert(.maskShift)
+            let shiftDown = CGEvent(keyboardEventSource: src, virtualKey: 0x38, keyDown: true)
+            shiftDown?.flags = tabFlags
+            shiftDown?.post(tap: .cghidEventTap)
+        }
+        
+        // Tap Tab
         let tabDown = CGEvent(keyboardEventSource: src, virtualKey: 0x30, keyDown: true)
-        tabDown?.flags = .maskCommand
+        tabDown?.flags = tabFlags
         tabDown?.post(tap: .cghidEventTap)
         
         let tabUp = CGEvent(keyboardEventSource: src, virtualKey: 0x30, keyDown: false)
-        tabUp?.flags = .maskCommand
+        tabUp?.flags = tabFlags
         tabUp?.post(tap: .cghidEventTap)
         
-        // 3. Start Hand Tracking
-        HandTracker.shared.startTracking()
-        
-        HandTracker.shared.onFistOpened = {
-            print("Hand opening detected - releasing App Switcher")
-            // 4. Release Cmd to select app
-            let cmdUp = CGEvent(keyboardEventSource: src, virtualKey: 0x37, keyDown: false)
-            cmdUp?.post(tap: .cghidEventTap)
+        if !forward {
+            let shiftUp = CGEvent(keyboardEventSource: src, virtualKey: 0x38, keyDown: false)
+            shiftUp?.flags = .maskCommand
+            shiftUp?.post(tap: .cghidEventTap)
         }
+        
+        // Release Cmd immediately
+        let cmdUp = CGEvent(keyboardEventSource: src, virtualKey: 0x37, keyDown: false)
+        cmdUp?.post(tap: .cghidEventTap)
     }
     
-    private func switchScreen() {
-        // Simulates Ctrl+Right Arrow (Move a space right)
-        postKeyCombo(virtualKeys: [0x7C], flags: .maskControl) // 0x7C = Right Arrow, 0x3B = Ctrl
+    private func switchScreen(right: Bool) {
+        // Simulates Ctrl+Right Arrow / Left Arrow (Move a space right/left)
+        let key: CGKeyCode = right ? 0x7C : 0x7B // 0x7C = Right Arrow, 0x7B = Left Arrow
+        postKeyCombo(virtualKeys: [key], flags: .maskControl) // 0x3B = Ctrl
     }
     
     private func showMissionControl() {

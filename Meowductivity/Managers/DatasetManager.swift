@@ -1,93 +1,280 @@
 import Foundation
 import AppKit
-import CoreImage
+import CreateML
+import TabularData
+import CoreML
+
+struct GestureFrame: Codable {
+    let landmarks: [CGPoint]
+}
+
+struct GestureData: Codable {
+    let name: String
+    let frames: [GestureFrame]
+    /// Number of landmark points per frame. 21 = single hand, 42 = two hands.
+    let pointCount: Int
+
+    // Backward-compatible decoding (old files lack pointCount → default to 21)
+    init(name: String, frames: [GestureFrame], pointCount: Int) {
+        self.name = name
+        self.frames = frames
+        self.pointCount = pointCount
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        name = try container.decode(String.self, forKey: .name)
+        frames = try container.decode([GestureFrame].self, forKey: .frames)
+        pointCount = try container.decodeIfPresent(Int.self, forKey: .pointCount) ?? 21
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, frames, pointCount
+    }
+}
 
 class DatasetManager {
     static let shared = DatasetManager()
-    
+
     // Directory structure: ~/Documents/Meowductivity/Dataset/
     var datasetDirectory: URL {
         let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         return documents.appendingPathComponent("Meowductivity/Dataset")
     }
-    
-    func saveFrames(_ frames: [CGImage], forGesture gestureName: String, completion: @escaping (Result<Void, Error>) -> Void) {
-        let trainingDir = datasetDirectory.appendingPathComponent("Training/\(gestureName)")
-        let testingDir = datasetDirectory.appendingPathComponent("Testing/\(gestureName)")
-        
-        do {
-            try FileManager.default.createDirectory(at: trainingDir, withIntermediateDirectories: true, attributes: nil)
-            try FileManager.default.createDirectory(at: testingDir, withIntermediateDirectories: true, attributes: nil)
-        } catch {
-            completion(.failure(error))
-            return
-        }
-        
+
+    var gesturesDirectory: URL {
+        return datasetDirectory.appendingPathComponent("Gestures")
+    }
+
+    /// Compiled model for single-hand gestures (21 points = 42 features).
+    var model1HUrl: URL { datasetDirectory.appendingPathComponent("GestureClassifier1H.mlmodelc") }
+    /// Compiled model for two-hand gestures (42 points = 84 features).
+    var model2HUrl: URL { datasetDirectory.appendingPathComponent("GestureClassifier2H.mlmodelc") }
+
+    init() {
+        try? FileManager.default.createDirectory(at: gesturesDirectory, withIntermediateDirectories: true, attributes: nil)
+    }
+
+    // MARK: – Save
+
+    func saveLandmarks(_ frames: [[CGPoint]], forGesture gestureName: String, completion: @escaping (Result<Void, Error>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            // Shuffle and split 80/20
-            var shuffledFrames = frames.shuffled()
-            let testCount = max(1, Int(Double(frames.count) * 0.2)) // 20% for testing
-            let testFrames = Array(shuffledFrames.prefix(testCount))
-            let trainFrames = Array(shuffledFrames.dropFirst(testCount))
-            
-            let timestamp = Int(Date().timeIntervalSince1970)
-            
+            guard !frames.isEmpty else {
+                DispatchQueue.main.async { completion(.failure(NSError(domain: "DatasetManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "No frames provided"]))) }
+                return
+            }
+
+            let pointCount = frames[0].count
+
+            // Compute centroid frame across all valid frames
+            var centroid: [CGPoint] = Array(repeating: .zero, count: pointCount)
+            var validCount = 0
+            for frame in frames where frame.count == pointCount {
+                for i in 0..<pointCount {
+                    centroid[i].x += frame[i].x
+                    centroid[i].y += frame[i].y
+                }
+                validCount += 1
+            }
+            guard validCount > 0 else {
+                DispatchQueue.main.async { completion(.failure(NSError(domain: "DatasetManager", code: 3, userInfo: [NSLocalizedDescriptionKey: "No valid frames with consistent point count"]))) }
+                return
+            }
+            let countF = CGFloat(validCount)
+            for i in 0..<pointCount {
+                centroid[i].x /= countF
+                centroid[i].y /= countF
+            }
+
+            // Generate ~100 augmented frames from the centroid
+            var augmented: [GestureFrame] = [GestureFrame(landmarks: centroid)]
+
+            for _ in 0..<100 {
+                let scale = CGFloat.random(in: 0.9...1.1)
+                let angle = CGFloat.random(in: -0.2...0.2)
+                let jitter: CGFloat = 0.02
+                let cosA = cos(angle), sinA = sin(angle)
+
+                // Augment each hand block independently (each block of 21 pts)
+                var newPoints = [CGPoint]()
+                let handsCount = pointCount / 21
+                for h in 0..<handsCount {
+                    let base = h * 21
+                    let wrist = centroid[base]
+                    for pt in centroid[base..<base+21] {
+                        let jx = CGFloat.random(in: -jitter...jitter)
+                        let jy = CGFloat.random(in: -jitter...jitter)
+                        let tx = pt.x - wrist.x, ty = pt.y - wrist.y
+                        let rx = (tx * cosA - ty * sinA) * scale + wrist.x + jx
+                        let ry = (tx * sinA + ty * cosA) * scale + wrist.y + jy
+                        newPoints.append(CGPoint(x: rx, y: ry))
+                    }
+                }
+                augmented.append(GestureFrame(landmarks: newPoints))
+            }
+
+            let gestureData = GestureData(name: gestureName, frames: augmented, pointCount: pointCount)
+            let fileURL = self.gesturesDirectory.appendingPathComponent("\(gestureName).json")
+
             do {
-                for (index, frame) in trainFrames.enumerated() {
-                    let fileURL = trainingDir.appendingPathComponent("\(timestamp)_train_\(index).jpg")
-                    try self.saveImage(frame, to: fileURL)
-                }
-                for (index, frame) in testFrames.enumerated() {
-                    let fileURL = testingDir.appendingPathComponent("\(timestamp)_test_\(index).jpg")
-                    try self.saveImage(frame, to: fileURL)
-                }
-                
-                DispatchQueue.main.async {
-                    completion(.success(()))
-                }
+                let data = try JSONEncoder().encode(gestureData)
+                try data.write(to: fileURL)
+                self.cleanupOldData(forGesture: gestureName)
+                DispatchQueue.main.async { completion(.success(())) }
             } catch {
-                DispatchQueue.main.async {
-                    completion(.failure(error))
+                DispatchQueue.main.async { completion(.failure(error)) }
+            }
+        }
+    }
+
+    // MARK: – Load
+
+    func loadLandmarks(forGesture gestureName: String) -> [[CGPoint]]? {
+        let fileURL = gesturesDirectory.appendingPathComponent("\(gestureName).json")
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let gestureData = try JSONDecoder().decode(GestureData.self, from: data)
+            return gestureData.frames.map { $0.landmarks }
+        } catch {
+            print("Failed to load landmarks for gesture \(gestureName): \(error)")
+            return nil
+        }
+    }
+
+    /// Loads all gestures, grouping by point count.
+    func loadAllGestures() -> [String: [[CGPoint]]] {
+        var all: [String: [[CGPoint]]] = [:]
+        guard let files = try? FileManager.default.contentsOfDirectory(at: gesturesDirectory, includingPropertiesForKeys: nil) else { return all }
+        for file in files where file.pathExtension == "json" {
+            let name = file.deletingPathExtension().lastPathComponent
+            if let landmarks = loadLandmarks(forGesture: name) { all[name] = landmarks }
+        }
+        return all
+    }
+
+    /// Loads all gesture metadata (name + pointCount) without loading full frame data.
+    private func loadAllGestureMetadata() -> [(name: String, pointCount: Int)] {
+        guard let files = try? FileManager.default.contentsOfDirectory(at: gesturesDirectory, includingPropertiesForKeys: nil) else { return [] }
+        return files.compactMap { file -> (String, Int)? in
+            guard file.pathExtension == "json",
+                  let data = try? Data(contentsOf: file),
+                  let gd = try? JSONDecoder().decode(GestureData.self, from: data) else { return nil }
+            return (gd.name, gd.pointCount)
+        }
+    }
+
+    // MARK: – Train
+
+    /// Trains one or two CoreML classifiers:
+    ///  - `GestureClassifier1H.mlmodelc` for single-hand gestures (pointCount == 21)
+    ///  - `GestureClassifier2H.mlmodelc` for two-hand gestures   (pointCount == 42)
+    func trainModel(completion: @escaping (Result<[URL], Error>) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let metadata = self.loadAllGestureMetadata()
+            guard !metadata.isEmpty else {
+                DispatchQueue.main.async { completion(.failure(NSError(domain: "DatasetManager", code: 2, userInfo: [NSLocalizedDescriptionKey: "No gesture data found"]))) }
+                return
+            }
+
+            // Group gesture names by point count
+            var byPointCount: [Int: [String]] = [:]
+            for m in metadata {
+                byPointCount[m.pointCount, default: []].append(m.name)
+            }
+
+            var trainedURLs: [URL] = []
+            var trainingError: Error? = nil
+
+            for (pointCount, gestureNames) in byPointCount {
+                guard gestureNames.count >= 2 else {
+                    print("Skipping \(pointCount)-point model: need ≥2 gestures, have \(gestureNames.count)")
+                    continue
+                }
+
+                // Build DataFrame columns
+                var labels = [String]()
+                var px: [[Double]] = Array(repeating: [], count: pointCount)
+                var py: [[Double]] = Array(repeating: [], count: pointCount)
+
+                for name in gestureNames {
+                    guard let frames = self.loadLandmarks(forGesture: name) else { continue }
+                    for frame in frames {
+                        guard frame.count == pointCount else { continue }
+                        labels.append(name)
+                        for (i, pt) in frame.enumerated() {
+                            px[i].append(Double(pt.x))
+                            py[i].append(Double(pt.y))
+                        }
+                    }
+                }
+
+                guard labels.count >= 2 else { continue }
+
+                var df = DataFrame()
+                df.append(column: Column<String>(name: "label", contents: labels))
+                for i in 0..<pointCount {
+                    df.append(column: Column<Double>(name: "p\(i)_x", contents: px[i]))
+                    df.append(column: Column<Double>(name: "p\(i)_y", contents: py[i]))
+                }
+
+                let isTwoHand = pointCount == 42
+                let modelName = isTwoHand ? "GestureClassifier2H" : "GestureClassifier1H"
+                let modelURL = self.datasetDirectory.appendingPathComponent("\(modelName).mlmodel")
+                let compiledDest = isTwoHand ? self.model2HUrl : self.model1HUrl
+
+                do {
+                    let classifier = try MLClassifier(trainingData: df, targetColumn: "label")
+
+                    if FileManager.default.fileExists(atPath: modelURL.path) {
+                        try FileManager.default.removeItem(at: modelURL)
+                    }
+
+                    let meta = MLModelMetadata(
+                        author: "Meowductivity",
+                        shortDescription: "Custom CoreML Landmark Hand Gesture Model (\(isTwoHand ? "2-hand" : "1-hand"))",
+                        version: "2.0"
+                    )
+                    try classifier.write(to: modelURL, metadata: meta)
+
+                    let compiledTemp = try MLModel.compileModel(at: modelURL)
+                    if FileManager.default.fileExists(atPath: compiledDest.path) {
+                        try FileManager.default.removeItem(at: compiledDest)
+                    }
+                    try FileManager.default.moveItem(at: compiledTemp, to: compiledDest)
+                    trainedURLs.append(compiledDest)
+                } catch {
+                    trainingError = error
+                    print("Training error for \(modelName): \(error)")
+                }
+            }
+
+            DispatchQueue.main.async {
+                if trainedURLs.isEmpty {
+                    completion(.failure(trainingError ?? NSError(domain: "DatasetManager", code: 4, userInfo: [NSLocalizedDescriptionKey: "No models trained (need ≥2 gestures per hand type)"])))
+                } else {
+                    completion(.success(trainedURLs))
                 }
             }
         }
     }
-    
-    private func saveImage(_ cgImage: CGImage, to url: URL) throws {
-        let bitmapRep = NSBitmapImageRep(cgImage: cgImage)
-        guard let data = bitmapRep.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
-            throw NSError(domain: "DatasetManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to create JPEG data"])
-        }
-        try data.write(to: url)
-    }
-    
-    private var backgroundIndex = 0
-    func saveBackgroundFrame(_ frame: CGImage) {
-        let isTest = backgroundIndex % 5 == 0 // 20% to testing
-        let dir = datasetDirectory.appendingPathComponent(isTest ? "Testing/Background" : "Training/Background")
-        
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
-        
-        let fileURL = dir.appendingPathComponent("bg_\(backgroundIndex).jpg")
-        try? saveImage(frame, to: fileURL)
-        
-        backgroundIndex = (backgroundIndex + 1) % 60
-    }
-    
+
+    // MARK: – Delete / Cleanup
+
     func deleteGesture(named gestureName: String) {
-        let trainingDir = datasetDirectory.appendingPathComponent("Training/\(gestureName)")
-        let testingDir = datasetDirectory.appendingPathComponent("Testing/\(gestureName)")
-        
-        do {
-            if FileManager.default.fileExists(atPath: trainingDir.path) {
-                try FileManager.default.removeItem(at: trainingDir)
-            }
-            if FileManager.default.fileExists(atPath: testingDir.path) {
-                try FileManager.default.removeItem(at: testingDir)
-            }
-            print("Successfully deleted dataset for gesture: \(gestureName)")
-        } catch {
-            print("Failed to delete dataset for gesture \(gestureName): \(error)")
-        }
+        let fileURL = gesturesDirectory.appendingPathComponent("\(gestureName).json")
+        try? FileManager.default.removeItem(at: fileURL)
+        cleanupOldData(forGesture: gestureName)
+        print("Successfully deleted dataset for gesture: \(gestureName)")
+    }
+
+    private func cleanupOldData(forGesture gestureName: String) {
+        let dirs = [
+            datasetDirectory.appendingPathComponent("Training/\(gestureName)"),
+            datasetDirectory.appendingPathComponent("Testing/\(gestureName)"),
+            datasetDirectory.appendingPathComponent("Training/Background"),
+            datasetDirectory.appendingPathComponent("Testing/Background")
+        ]
+        dirs.forEach { try? FileManager.default.removeItem(at: $0) }
     }
 }

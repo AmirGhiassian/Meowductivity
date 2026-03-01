@@ -6,29 +6,37 @@ struct TrainingSettingsView: View {
     @Query private var gestures: [GestureTask]
     
     @State private var showingRecordSheet = false
-    @StateObject private var trainer = GestureTrainer()
+    @State private var isTraining = false
+    @State private var trainingMessage = ""
     
     @AppStorage("isRecognitionEnabled") private var isRecognitionEnabled = true
+    @AppStorage("showFaintDotsOverlay") private var showFaintDotsOverlay = false
     @AppStorage("recognitionSensitivity") private var recognitionSensitivity = 0.8
-    @AppStorage("needsTraining") private var needsTraining = false
+    @AppStorage("cropSizeRatio") private var cropSizeRatio = 0.85
     
     var body: some View {
         VStack {
             Form {
                 Toggle("Enable Gesture Recognition", isOn: $isRecognitionEnabled)
                     .font(.headline)
-                    .disabled(needsTraining || trainer.isTraining)
                     
-                if needsTraining {
-                    Text("Model requires training before recognition can be enabled.")
+                Toggle("Show Faint Camera Dots Overlay", isOn: $showFaintDotsOverlay)
+                Text("Displays faint green dots tracking your hand on screen.")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    
+                VStack(alignment: .leading) {
+                    Text("Sensitivity: \(Int(recognitionSensitivity * 100))%")
+                    Slider(value: $recognitionSensitivity, in: 0.0...1.0, step: 0.05)
+                    Text("Higher sensitivity triggers gestures more easily with less exact hand positioning.")
                         .font(.caption)
-                        .foregroundColor(.red)
+                        .foregroundColor(.secondary)
                 }
                 
                 VStack(alignment: .leading) {
-                    Text("Confidence Threshold: \(Int(recognitionSensitivity * 100))%")
-                    Slider(value: $recognitionSensitivity, in: 0.70...0.99, step: 0.01)
-                    Text("A higher threshold reduces sensitivity (requires more confidence to trigger).")
+                    Text("Detection Box Size: \(Int(cropSizeRatio * 100))%")
+                    Slider(value: $cropSizeRatio, in: 0.4...1.0, step: 0.05)
+                    Text("Adjust the size of the camera area used for gesture detection.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -56,46 +64,26 @@ struct TrainingSettingsView: View {
             }
             
             VStack {
-                if trainer.isTraining {
-                    HStack {
+                HStack {
+                    Spacer()
+                    
+                    if isTraining {
                         ProgressView()
                             .controlSize(.small)
                             .padding(.trailing, 4)
-                        Text(trainer.trainingStatus)
+                        Text(trainingMessage)
                             .foregroundColor(.secondary)
+                            .padding(.vertical)
+                    } else {
+                        Button(action: {
+                            showingRecordSheet = true
+                        }) {
+                            Label("Add Gesture", systemImage: "plus")
+                        }
+                        .padding()
+                        .disabled(isRecognitionEnabled)
+                        .help("Turn off gesture recognition to add a new gesture")
                     }
-                    .padding(.top, 8)
-                } else if let error = trainer.lastError {
-                    Text(error)
-                        .foregroundColor(.red)
-                        .font(.caption)
-                        .padding(.top, 8)
-                } else if trainer.trainingStatus == "Model Trained Successfully!" {
-                    Text(trainer.trainingStatus)
-                        .foregroundColor(.green)
-                        .font(.caption)
-                        .padding(.top, 8)
-                }
-                
-                HStack {
-                    Button(action: {
-                        trainer.trainModel { _ in }
-                    }) {
-                        Label("Train Model", systemImage: "brain.head.profile")
-                    }
-                    .disabled(trainer.isTraining || gestures.isEmpty)
-                    .padding()
-                    
-                    Spacer()
-                    
-                    Button(action: {
-                        showingRecordSheet = true
-                    }) {
-                        Label("Add Gesture", systemImage: "plus")
-                    }
-                    .padding()
-                    .disabled(isRecognitionEnabled || trainer.isTraining)
-                    .help("Turn off gesture recognition to add a new gesture")
                 }
             }
             .background(Color(NSColor.controlBackgroundColor))
@@ -110,8 +98,8 @@ struct TrainingSettingsView: View {
     private func addGesture(gestureName: String) {
         let newGesture = GestureTask(gestureName: gestureName, actionName: "None")
         modelContext.insert(newGesture)
-        needsTraining = true
         isRecognitionEnabled = false
+        triggerTraining()
     }
     
     private func deleteGestures(offsets: IndexSet) {
@@ -121,8 +109,36 @@ struct TrainingSettingsView: View {
             modelContext.delete(gesture)
         }
         if !offsets.isEmpty {
-            needsTraining = true
             isRecognitionEnabled = false
+            triggerTraining()
+        }
+    }
+    
+    private func triggerTraining() {
+        isTraining = true
+        trainingMessage = "Training ML model..."
+        
+        DatasetManager.shared.trainModel { result in
+            switch result {
+            case .success(_):
+                self.trainingMessage = "Model trained!"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    self.isTraining = false
+                }
+                GestureRecognizer.shared.loadModel()
+            case .failure(let error):
+                let nsError = error as NSError
+                if nsError.domain == "DatasetManager" && (nsError.code == 2 || nsError.code == 4) {
+                    self.trainingMessage = "Requires 2+ gestures"
+                } else {
+                    self.trainingMessage = "Training failed"
+                    print("Training failed: \(error)")
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    self.isTraining = false
+                }
+                GestureRecognizer.shared.loadModel()
+            }
         }
     }
 }

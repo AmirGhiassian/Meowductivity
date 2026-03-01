@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 struct ActionMappingView: View {
     @Environment(\.modelContext) private var modelContext
     @Query private var gestures: [GestureTask]
-    let allActions = ActionExecutor.shared.allActions
+    let actionGroups = ActionExecutor.shared.actionGroups
     
     var body: some View {
         VStack {
@@ -29,8 +29,12 @@ struct ActionMappingView: View {
                                     saveAndRefresh()
                                 }
                             )) {
-                                ForEach(allActions, id: \.self) { action in
-                                    Text(action).tag(action)
+                                ForEach(actionGroups, id: \.title) { group in
+                                    Section(header: Text(group.title)) {
+                                        ForEach(group.actions, id: \.self) { action in
+                                            Text(action).tag(action)
+                                        }
+                                    }
                                 }
                             }
                             .frame(width: 250)
