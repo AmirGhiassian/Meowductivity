@@ -26,6 +26,7 @@ struct ActionMappingView: View {
                                 get: { gesture.actionName },
                                 set: { newValue in
                                     gesture.actionName = newValue
+                                    saveAndRefresh()
                                 }
                             )) {
                                 ForEach(allActions, id: \.self) { action in
@@ -36,7 +37,10 @@ struct ActionMappingView: View {
                             
                             Toggle("", isOn: Binding(
                                 get: { gesture.isActive },
-                                set: { gesture.isActive = $0 }
+                                set: { newValue in
+                                    gesture.isActive = newValue
+                                    saveAndRefresh()
+                                }
                             ))
                             .labelsHidden()
                             .help("Enable or Disable this rule")
@@ -47,7 +51,10 @@ struct ActionMappingView: View {
                                 Text("App URL: ").font(.caption)
                                 TextField("file:///Applications/Safari.app", text: Binding(
                                     get: { gesture.appURL ?? "" },
-                                    set: { gesture.appURL = $0 }
+                                    set: { newValue in
+                                        gesture.appURL = newValue
+                                        saveAndRefresh()
+                                    }
                                 ))
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .frame(maxWidth: 300)
@@ -59,6 +66,7 @@ struct ActionMappingView: View {
                                     panel.allowedContentTypes = [UTType.application]
                                     if panel.runModal() == .OK {
                                         gesture.appURL = panel.url?.absoluteString
+                                        saveAndRefresh()
                                     }
                                 }
                             }
@@ -68,7 +76,10 @@ struct ActionMappingView: View {
                                 Text("Keys: ").font(.caption)
                                 TextField("e.g. cmd,shift,c", text: Binding(
                                     get: { gesture.keyCombo ?? "" },
-                                    set: { gesture.keyCombo = $0 }
+                                    set: { newValue in
+                                        gesture.keyCombo = newValue
+                                        saveAndRefresh()
+                                    }
                                 ))
                                 .textFieldStyle(RoundedBorderTextFieldStyle())
                                 .frame(maxWidth: 200)
@@ -78,15 +89,16 @@ struct ActionMappingView: View {
                     }
                     .padding(.vertical, 8)
                 }
-                .onChange(of: gestures) { _ in
-                    if let delegate = NSApp.delegate as? AppDelegate {
-                        // Debounce might be needed in a real app, but SwiftData onChange works for now
-                        delegate.refreshActiveGestures(modelContext: modelContext)
-                    }
-                }
             }
         }
         .padding()
         .frame(minWidth: 500, minHeight: 400)
+    }
+    
+    private func saveAndRefresh() {
+        try? modelContext.save()
+        if let delegate = NSApp.delegate as? AppDelegate {
+            delegate.refreshActiveGestures(modelContext: modelContext)
+        }
     }
 }

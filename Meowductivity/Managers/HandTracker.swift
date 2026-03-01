@@ -83,12 +83,13 @@ class HandTracker {
             CGPoint(x: littleTip.location.x, y: littleTip.location.y)
         ]
         
-        // Calculate average distance from wrist to tips
-        let averageDistance = tips.map { distance(from: wristPoint, to: $0) }.reduce(0, +) / CGFloat(tips.count)
+        // Calculate max distance from wrist to any tip
+        let distances = tips.map { distance(from: wristPoint, to: $0) }
+        let maxDistance = distances.max() ?? 0
         
         // Thresholds for open vs closed hand
-        // In normalized coordinates, distance typically < 0.2 indicates a closed fist, > 0.3 indicates an open hand
-        let isClosedFist = averageDistance < 0.25
+        // In normalized coordinates, max distance < 0.25 means ALL fingers are curled into a fist
+        let isClosedFist = maxDistance < 0.25
         
         DispatchQueue.main.async {
             if isClosedFist {

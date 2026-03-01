@@ -3,6 +3,7 @@ import AVFoundation
 import CoreImage
 import AppKit
 import Combine
+import Vision
 
 struct GestureActionData {
     let actionName: String
@@ -24,6 +25,7 @@ class CameraManager: NSObject, ObservableObject {
     private var capturedBuffers: [CGImage] = []
     private var videoOutput = AVCaptureVideoDataOutput()
     private let context = CIContext()
+    private var backgroundFrameCounter = 0
     
     var onRecordingFinished: (([CGImage]) -> Void)?
     
@@ -135,9 +137,31 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             // Note: In a production app, we would drop frames here (e.g., process 1 out of 5 frames) to save CPU
             if HandTracker.shared.isActive {
                 HandTracker.shared.processFrame(croppedImage)
-            } else if GestureRecognizer.shared.isModelLoaded {
-                GestureRecognizer.shared.predict(image: croppedImage, activeGestures: self.activeGestures)
+            } else {
+                if GestureRecognizer.shared.isModelLoaded {
+                    GestureRecognizer.shared.predict(image: croppedImage, activeGestures: self.activeGestures)
+                }
+                
+                // Auto-collect background frames periodically
+                self.backgroundFrameCounter += 1
+                if self.backgroundFrameCounter % 30 == 0 {
+                    self.collectBackgroundFrameIfNoHand(croppedImage)
+                }
             }
         }
+    }
+    
+    private func collectBackgroundFrameIfNoHand(_ image: CGImage) {
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+        let request = VNDetectHumanHandPoseRequest { request, error in
+            if let results = request.results as? [VNHumanHandPoseObservation], !results.isEmpty {
+                // Hand detected, ignore
+                return
+            }
+            // No hand detected! Save as background.
+            DatasetManager.shared.saveBackgroundFrame(image)
+        }
+        request.maximumHandCount = 1
+        try? handler.perform([request])
     }
 }

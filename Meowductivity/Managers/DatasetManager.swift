@@ -61,6 +61,19 @@ class DatasetManager {
         try data.write(to: url)
     }
     
+    private var backgroundIndex = 0
+    func saveBackgroundFrame(_ frame: CGImage) {
+        let isTest = backgroundIndex % 5 == 0 // 20% to testing
+        let dir = datasetDirectory.appendingPathComponent(isTest ? "Testing/Background" : "Training/Background")
+        
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: nil)
+        
+        let fileURL = dir.appendingPathComponent("bg_\(backgroundIndex).jpg")
+        try? saveImage(frame, to: fileURL)
+        
+        backgroundIndex = (backgroundIndex + 1) % 60
+    }
+    
     func deleteGesture(named gestureName: String) {
         let trainingDir = datasetDirectory.appendingPathComponent("Training/\(gestureName)")
         let testingDir = datasetDirectory.appendingPathComponent("Testing/\(gestureName)")
